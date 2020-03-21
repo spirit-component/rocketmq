@@ -1,14 +1,10 @@
 package rocketmq
 
 import (
-	"github.com/go-spirit/spirit/cache"
 	"github.com/go-spirit/spirit/component"
 	"github.com/go-spirit/spirit/doc"
 	"github.com/go-spirit/spirit/mail"
-	"github.com/go-spirit/spirit/message"
 	"github.com/go-spirit/spirit/worker"
-	"github.com/go-spirit/spirit/worker/fbp"
-	"github.com/go-spirit/spirit/worker/fbp/protocol"
 )
 
 type RocketMQComponent struct {
@@ -36,8 +32,8 @@ func (p *RocketMQComponent) Stop() error {
 	return nil
 }
 
-func NewRocketMQComponent() {
-
+func NewRocketMQComponent(alias string, opts ...component.Option) (comp component.Component, err error) {
+	return
 }
 
 func (p *RocketMQComponent) Route(mail.Session) worker.HandlerFunc {
@@ -45,6 +41,7 @@ func (p *RocketMQComponent) Route(mail.Session) worker.HandlerFunc {
 }
 
 func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
+	return
 }
 
 func (p *RocketMQComponent) receiveMessage() {
