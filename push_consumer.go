@@ -14,13 +14,16 @@ type PushConsumer struct {
 
 	topic      string
 	expression string
+	retryTimes int
 
 	messageChan chan<- *rmq.MessageExt
+
+	consumeFunc ConsumeFunc
 }
 
 func (p *PushConsumer) Start() (err error) {
 
-	err = p.pushConsumer.Subscribe(p.topic, p.expression, p.consumeFunc)
+	err = p.pushConsumer.Subscribe(p.topic, p.expression, p.consume)
 	if err != nil {
 		return
 	}
@@ -33,8 +36,13 @@ func (p *PushConsumer) Start() (err error) {
 	return
 }
 
-func (p *PushConsumer) consumeFunc(msg *rmq.MessageExt) rmq.ConsumeStatus {
-	p.messageChan <- msg
+func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
+	err := p.consumeFunc(msg)
+	if err != nil {
+		if msg.ReconsumeTimes < p.retryTimes {
+			return rmq.ReConsumeLater
+		}
+	}
 	return rmq.ConsumeSuccess
 }
 
@@ -44,13 +52,16 @@ func (p *PushConsumer) Stop() error {
 
 func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configuration) (consumer *PushConsumer, err error) {
 
-	nameServer := conf.GetString("name-server")
-	groupID := conf.GetString("group-id")
+	consumerConf := conf.GetConfig("consumer")
 
-	topic := conf.GetString("subscribe.topic")
-	expression := conf.GetString("subscribe.expression", "*")
+	nameServer := consumerConf.GetString("name-server")
+	groupID := consumerConf.GetString("group-id")
 
-	credentialName := conf.GetString("credential-name")
+	topic := consumerConf.GetString("subscribe.topic")
+	expression := consumerConf.GetString("subscribe.expression", "*")
+	retryTimes := consumerConf.GetInt32("subscribe.retry-times", 0)
+
+	credentialName := consumerConf.GetString("credential-name")
 
 	if len(credentialName) == 0 {
 		err = fmt.Errorf("credential name is empty")
@@ -62,7 +73,7 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	channel := conf.GetString("credentials." + credentialName + ".channel")
 
 	var messageModel rmq.MessageModel
-	switch conf.GetString("message-model", "clustering") {
+	switch consumerConf.GetString("message-model", "clustering") {
 	case "clustering":
 		{
 			messageModel = rmq.Clustering
@@ -74,7 +85,7 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	}
 
 	var consumerModel rmq.ConsumerModel
-	switch conf.GetString("consumer-model", "cocurrently") {
+	switch consumerConf.GetString("consumer-model", "cocurrently") {
 	case "cocurrently":
 		{
 			consumerModel = rmq.CoCurrently
@@ -85,9 +96,9 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		}
 	}
 
-	threadCount := conf.GetInt32("thread-count", int32(runtime.NumCPU()))
-	messageBatchMaxSize := conf.GetInt32("msg-batch-max-size", 32)
-	maxCacheMsgSize := conf.GetByteSize("max-cache-msg-size")
+	threadCount := consumerConf.GetInt32("thread-count", int32(runtime.NumCPU()))
+	messageBatchMaxSize := consumerConf.GetInt32("msg-batch-max-size", 32)
+	maxCacheMsgSize := consumerConf.GetByteSize("max-cache-msg-size")
 
 	consumerConfig := &rmq.PushConsumerConfig{
 		ClientConfig: rmq.ClientConfig{
@@ -114,6 +125,7 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	consumer = &PushConsumer{
 		topic:      topic,
 		expression: expression,
+		retryTimes: int(retryTimes),
 
 		consumerConfig: consumerConfig,
 		pushConsumer:   pushConsumer,
@@ -121,4 +133,8 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	}
 
 	return
+}
+
+func (p *PushConsumer) SetConsumerFunc(fn ConsumeFunc) {
+	p.consumeFunc = fn
 }

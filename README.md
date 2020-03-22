@@ -7,6 +7,8 @@ config example
 
 components.rocketmq.endpoint_1 {
 
+        bounded-msgbox-size = 64
+
         credentials = {
             c1 = {
                 access-key = "Your Access Key"
@@ -32,6 +34,8 @@ components.rocketmq.endpoint_1 {
 
 components.rocketmq.endpoint_2 {
 
+        bounded-msgbox-size = 64
+
         credentials = {
             c1 = {
                 access-key = "Your Access Key"
@@ -56,6 +60,7 @@ components.rocketmq.endpoint_2 {
             subscribe = {
                 topic          = "NewTodoTask"
                 expression     = "TagA||TagB"
+                retry-times    = 3
             }
         }
     }

@@ -12,6 +12,7 @@ import (
 type PullConsumer struct {
 	consumerConfig *rmq.PullConsumerConfig
 	pullConsumer   rmq.PullConsumer
+	consumeFunc    ConsumeFunc
 
 	topic      string
 	expression string
@@ -50,10 +51,12 @@ func (p *PullConsumer) pull() {
 				continue
 			case rmq.PullFound:
 				{
+
 					atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.NextBeginOffset)
 
 					for i := 0; i < len(pullResult.Messages); i++ {
-						p.messageChan <- pullResult.Messages[i]
+						p.consumeFunc(pullResult.Messages[i])
+						//TODO: process error
 					}
 				}
 			case rmq.PullNoMatchedMsg:
@@ -99,15 +102,15 @@ func (p *PullConsumer) Stop() error {
 
 func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configuration) (consumer *PullConsumer, err error) {
 
-	nameServer := conf.GetString("name-server")
-	groupID := conf.GetString("group-id")
+	consumerConf := conf.GetConfig("consumer")
 
-	topic := conf.GetString("subscribe.topic")
-	expression := conf.GetString("subscribe.expression", "*")
+	nameServer := consumerConf.GetString("name-server")
+	groupID := consumerConf.GetString("group-id")
+	topic := consumerConf.GetString("subscribe.topic")
+	expression := consumerConf.GetString("subscribe.expression", "*")
+	maxFetch := consumerConf.GetInt32("max-fetch", 32)
 
-	maxFetch := conf.GetInt32("max-fetch", 32)
-
-	credentialName := conf.GetString("credential-name")
+	credentialName := consumerConf.GetString("credential-name")
 
 	if len(credentialName) == 0 {
 		err = fmt.Errorf("credential name is empty")
@@ -148,4 +151,8 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	}
 
 	return
+}
+
+func (p *PullConsumer) SetConsumerFunc(fn ConsumeFunc) {
+	p.consumeFunc = fn
 }
