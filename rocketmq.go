@@ -1,6 +1,7 @@
 package rocketmq
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 
@@ -125,8 +126,13 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 
 func (p *RocketMQComponent) postMessage(msg *rmq.MessageExt) (err error) {
 
+	data, err := base64.StdEncoding.DecodeString(msg.Body)
+	if err != nil {
+		return
+	}
+
 	payload := &protocol.Payload{}
-	err = protocol.Unmarshal([]byte(msg.Body), payload)
+	err = protocol.Unmarshal(data, payload)
 
 	if err != nil {
 		return
