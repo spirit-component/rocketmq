@@ -167,6 +167,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 
 	if len(nameserver) == 0 {
 		err = fmt.Errorf("unknown nameserver in rocketmq component while send message, port to url: %s", port.Url)
+		return
 	}
 
 	payload, ok := session.Payload().Interface().(*protocol.Payload)
@@ -176,12 +177,11 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	}
 
 	data, err := payload.ToBytes()
-
-	msgBody := base64.StdEncoding.EncodeToString(data)
-
 	if err != nil {
 		return
 	}
+
+	msgBody := base64.StdEncoding.EncodeToString(data)
 
 	pConfig := &rmq.ProducerConfig{
 		ClientConfig: rmq.ClientConfig{
