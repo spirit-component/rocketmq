@@ -3,6 +3,7 @@ package rocketmq
 import (
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/gogap/config"
@@ -32,6 +33,10 @@ func (p *PullConsumer) Start() (err error) {
 	}
 
 	p.queues = p.pullConsumer.FetchSubscriptionMessageQueues(p.topic)
+
+	for i := 0; i < len(p.queues); i++ {
+		p.queueOffsets[p.queues[i].ID] = new(int64)
+	}
 
 	p.stopSignal = make(chan struct{}, 1)
 
@@ -82,6 +87,7 @@ func (p *PullConsumer) pull() {
 				return
 			}
 		default:
+			time.Sleep(time.Millisecond * 10)
 		}
 	}
 }

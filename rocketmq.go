@@ -113,6 +113,8 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 		return
 	}
 
+	p.consumer.SetConsumerFunc(p.postMessage)
+
 	p.boundedMsgBox = boundedMsgBox
 
 	return
@@ -138,6 +140,21 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	groupID := session.Query("group_id")
 	topic := session.Query("topic")
 	tags := session.Query("tags")
+
+	if len(groupID) == 0 {
+		err = fmt.Errorf("query of %s is empty", "group_id")
+		return
+	}
+
+	if len(topic) == 0 {
+		err = fmt.Errorf("query of %s is empty", "topic")
+		return
+	}
+
+	if len(tags) == 0 {
+		err = fmt.Errorf("query of %s is empty", "tags")
+		return
+	}
 
 	nameserver, exist := port.Metadata["name_server"]
 	if !exist {
@@ -197,10 +214,12 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	}
 
 	propertyMap := map[string]string{}
-	err = json.Unmarshal([]byte(property), &propertyMap)
-	if err != nil {
-		err = errors.WithMessage(err, "property format error")
-		return
+	if len(property) > 0 {
+		err = json.Unmarshal([]byte(property), &propertyMap)
+		if err != nil {
+			err = errors.WithMessage(err, "property format error")
+			return
+		}
 	}
 
 	msg := rmq.Message{
@@ -211,6 +230,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	}
 
 	err = p.sendMessageToRMQ(pConfig, &msg)
+
 	if err != nil {
 		return
 	}
@@ -244,10 +264,12 @@ func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rm
 	}
 	defer producer.Shutdown()
 
-	_, err = producer.SendMessageSync(msg)
+	sendResult, err := producer.SendMessageSync(msg)
 	if err != nil {
 		return
 	}
+
+	logrus.Debug(sendResult.String())
 
 	return
 }
