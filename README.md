@@ -25,8 +25,8 @@ components.rocketmq.endpoint_1 {
             max-fetch       = 30
 
             subscribe = {
-                topic          = "NewTodoTask"
-                expression     = "TagA||TagB"
+                topic          = "API"
+                expression     = "*"     // https://rocketmq.apache.org/docs/filter-by-sql92-example/
             }
         }
     }
@@ -58,8 +58,8 @@ components.rocketmq.endpoint_2 {
             max-cache-msg-size = 4mb
 
             subscribe = {
-                topic          = "NewTodoTask"
-                expression     = "TagA||TagB"
+                topic          = "API"
+                expression     = "NewTodoTask||GetTodoTask"
                 retry-times    = 3
             }
         }

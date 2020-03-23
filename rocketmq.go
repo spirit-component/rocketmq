@@ -2,7 +2,7 @@ package rocketmq
 
 import (
 	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"fmt"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
@@ -13,6 +13,8 @@ import (
 	"github.com/go-spirit/spirit/worker"
 	"github.com/go-spirit/spirit/worker/fbp"
 	"github.com/go-spirit/spirit/worker/fbp/protocol"
+	"github.com/gogap/logrus"
+	"github.com/pkg/errors"
 )
 
 type ConsumeFunc func(msg *rmq.MessageExt) (err error)
@@ -121,6 +123,132 @@ func (p *RocketMQComponent) Route(mail.Session) worker.HandlerFunc {
 }
 
 func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
+
+	logrus.WithField("component", "rocketmq").WithField("To", session.To()).Debugln("send message")
+
+	fbp.BreakSession(session)
+
+	port := fbp.GetSessionPort(session)
+
+	if port == nil {
+		err = errors.New("port info not exist")
+		return
+	}
+
+	groupID := session.Query("group_id")
+	topic := session.Query("topic")
+	tags := session.Query("tags")
+
+	nameserver, exist := port.Metadata["name_server"]
+	if !exist {
+		err = fmt.Errorf("port metadata of '%s' is not exist", "name_server")
+		return
+	}
+
+	property, _ := port.Metadata["property"]
+
+	accessKey, exist := port.Metadata["access_key"]
+	if !exist {
+		err = fmt.Errorf("port metadata of '%s' is not exist", "access_key")
+		return
+	}
+
+	secretKey, exist := port.Metadata["secret_key"]
+	if !exist {
+		err = fmt.Errorf("port metadata of '%s' is not exist", "secret_key")
+		return
+	}
+
+	channel, exist := port.Metadata["channel"]
+	if !exist {
+		err = fmt.Errorf("port metadata of '%s' is not exist", "channel")
+		return
+	}
+
+	if len(nameserver) == 0 {
+		err = fmt.Errorf("unknown nameserver in rocketmq component while send message, port to url: %s", port.Url)
+	}
+
+	payload, ok := session.Payload().Interface().(*protocol.Payload)
+	if !ok {
+		err = errors.New("could not convert session payload to *protocol.Payload")
+		return
+	}
+
+	data, err := payload.ToBytes()
+
+	msgBody := base64.StdEncoding.EncodeToString(data)
+
+	if err != nil {
+		return
+	}
+
+	pConfig := &rmq.ProducerConfig{
+		ClientConfig: rmq.ClientConfig{
+			GroupID:    groupID,
+			NameServer: nameserver,
+			Credentials: &rmq.SessionCredentials{
+				AccessKey: accessKey,
+				SecretKey: secretKey,
+				Channel:   channel,
+			},
+		},
+		ProducerModel: rmq.CommonProducer,
+	}
+
+	propertyMap := map[string]string{}
+	err = json.Unmarshal([]byte(property), &propertyMap)
+	if err != nil {
+		err = errors.WithMessage(err, "property format error")
+		return
+	}
+
+	msg := rmq.Message{
+		Topic:    topic,
+		Body:     msgBody,
+		Tags:     tags,
+		Property: propertyMap,
+	}
+
+	err = p.sendMessageToRMQ(pConfig, &msg)
+	if err != nil {
+		return
+	}
+
+	logrus.WithFields(
+		logrus.Fields{
+			"component":   "rocketmq",
+			"alias":       p.alias,
+			"topic":       topic,
+			"tags":        tags,
+			"name_server": nameserver,
+			"access_key":  accessKey,
+		},
+	).Debugln("Message sent")
+
+	return
+}
+
+func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (err error) {
+	producer, err := rmq.NewProducer(config)
+
+	if err != nil {
+		err = errors.WithMessage(err, "create common producer failed")
+		return
+	}
+
+	err = producer.Start()
+	if err != nil {
+		err = errors.WithMessage(err, "start common producer error")
+		return
+	}
+	defer producer.Shutdown()
+
+	_, err = producer.SendMessageSync(msg)
+	if err != nil {
+		return
+	}
+
 	return
 }
 
