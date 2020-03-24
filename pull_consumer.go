@@ -2,12 +2,13 @@ package rocketmq
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"sync/atomic"
 	"time"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/gogap/config"
-	"github.com/gogap/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 type PullConsumer struct {
@@ -38,7 +39,7 @@ func (p *PullConsumer) Start() (err error) {
 		p.queueOffsets[p.queues[i].ID] = new(int64)
 	}
 
-	p.stopSignal = make(chan struct{}, 1)
+	p.stopSignal = make(chan struct{})
 
 	go p.pull()
 
@@ -51,9 +52,13 @@ func (p *PullConsumer) pull() {
 		for _, mq := range p.queues {
 			pullResult := p.pullConsumer.Pull(mq, p.expression, atomic.LoadInt64(p.queueOffsets[mq.ID]), p.maxFetch)
 
+			if pullResult.NextBeginOffset < pullResult.MaxOffset {
+				atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.MaxOffset)
+				continue
+			}
+
 			switch pullResult.Status {
 			case rmq.PullNoNewMsg:
-				continue
 			case rmq.PullFound:
 				{
 
@@ -76,13 +81,18 @@ func (p *PullConsumer) pull() {
 						"name_server": p.consumerConfig.NameServer,
 					},
 				).Warnln("pull broker timeout")
-				continue
+				time.Sleep(time.Second)
 			}
 		}
 
 		select {
 		case <-p.stopSignal:
 			{
+				logrus.WithFields(logrus.Fields{
+					"topic":       p.topic,
+					"expression":  p.expression,
+					"name-server": p.consumerConfig.NameServer,
+				}).Info("Stopping pull consumer")
 				p.stopSignal <- struct{}{}
 				return
 			}
@@ -99,6 +109,12 @@ func (p *PullConsumer) Stop() error {
 		<-p.stopSignal
 		close(p.stopSignal)
 		p.stopSignal = nil
+
+		logrus.WithFields(logrus.Fields{
+			"topic":       p.topic,
+			"expression":  p.expression,
+			"name-server": p.consumerConfig.NameServer,
+		}).Info("Pull consumer stopped")
 
 		return p.pullConsumer.Shutdown()
 	}
@@ -129,8 +145,9 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 
 	consumerConfig := &rmq.PullConsumerConfig{
 		ClientConfig: rmq.ClientConfig{
-			GroupID:    groupID,
-			NameServer: nameServer,
+			GroupID:      groupID,
+			NameServer:   nameServer,
+			InstanceName: uuid.New().String(),
 			Credentials: &rmq.SessionCredentials{
 				AccessKey: accessKey,
 				SecretKey: secretKey,

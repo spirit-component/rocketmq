@@ -13,8 +13,8 @@ import (
 	"github.com/go-spirit/spirit/worker"
 	"github.com/go-spirit/spirit/worker/fbp"
 	"github.com/go-spirit/spirit/worker/fbp/protocol"
-	"github.com/gogap/logrus"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type ConsumeFunc func(msg *rmq.MessageExt) (err error)
@@ -31,8 +31,6 @@ type RocketMQComponent struct {
 	consumer rocketMQConsumer
 
 	boundedMsgBox chan *rmq.MessageExt
-
-	stopSignal chan struct{}
 
 	alias string
 }
@@ -55,21 +53,13 @@ func (p *RocketMQComponent) Start() error {
 
 func (p *RocketMQComponent) Stop() error {
 
-	if p.stopSignal != nil {
-		p.stopSignal <- struct{}{}
-		<-p.stopSignal
-		close(p.stopSignal)
-		p.stopSignal = nil
-	}
-
 	return p.consumer.Stop()
 }
 
 func NewRocketMQComponent(alias string, opts ...component.Option) (comp component.Component, err error) {
 
 	rmqComp := &RocketMQComponent{
-		alias:      alias,
-		stopSignal: make(chan struct{}),
+		alias: alias,
 	}
 
 	err = rmqComp.init(opts...)
