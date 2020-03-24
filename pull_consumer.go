@@ -2,7 +2,6 @@ package rocketmq
 
 import (
 	"fmt"
-	"github.com/google/uuid"
 	"sync/atomic"
 	"time"
 
@@ -131,6 +130,7 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	topic := consumerConf.GetString("subscribe.topic")
 	expression := consumerConf.GetString("subscribe.expression", "*")
 	maxFetch := consumerConf.GetInt32("max-fetch", 32)
+	instanceName := consumerConf.GetString("instance-name", "")
 
 	credentialName := consumerConf.GetString("credential-name")
 
@@ -147,7 +147,7 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		ClientConfig: rmq.ClientConfig{
 			GroupID:      groupID,
 			NameServer:   nameServer,
-			InstanceName: uuid.New().String(),
+			InstanceName: instanceName,
 			Credentials: &rmq.SessionCredentials{
 				AccessKey: accessKey,
 				SecretKey: secretKey,
