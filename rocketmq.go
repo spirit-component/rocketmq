@@ -97,8 +97,8 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 		return
 	}
 
-	mode := p.opts.Config.GetString("mode", "pull")
-	boxSize := p.opts.Config.GetInt32("bounded-msgbox-size", 30)
+	mode := p.opts.Config.GetString("consumer.mode", "pull")
+	boxSize := p.opts.Config.GetInt32("consumer.bounded-msgbox-size", 30)
 
 	boundedMsgBox := make(chan *rmq.MessageExt, int(boxSize))
 
@@ -108,7 +108,7 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 			return
 		}
 	} else if mode == "push" {
-		p.consumer, err = NewPushConsumer(boundedMsgBox, p.opts.Config)
+		p.consumer, err = NewPushConsumer(p.opts.Config)
 		if err != nil {
 			return
 		}

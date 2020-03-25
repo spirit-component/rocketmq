@@ -2,10 +2,10 @@ package rocketmq
 
 import (
 	"fmt"
-	"runtime"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/gogap/config"
+	"github.com/sirupsen/logrus"
 )
 
 type PushConsumer struct {
@@ -15,8 +15,6 @@ type PushConsumer struct {
 	topic      string
 	expression string
 	retryTimes int
-
-	messageChan chan<- *rmq.MessageExt
 
 	consumeFunc ConsumeFunc
 }
@@ -50,7 +48,7 @@ func (p *PushConsumer) Stop() error {
 	return p.pushConsumer.Shutdown()
 }
 
-func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configuration) (consumer *PushConsumer, err error) {
+func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err error) {
 
 	consumerConf := conf.GetConfig("consumer")
 
@@ -96,9 +94,13 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		}
 	}
 
-	threadCount := consumerConf.GetInt32("thread-count", int32(runtime.NumCPU()))
-	messageBatchMaxSize := consumerConf.GetInt32("msg-batch-max-size", 32)
-	maxCacheMsgSize := consumerConf.GetByteSize("max-cache-msg-size")
+	threadCount := consumerConf.GetInt32("thread-count", 0)
+	messageBatchMaxSize := consumerConf.GetInt32("msg-batch-max-size", 0)
+	maxCacheMsgSize := consumerConf.GetByteSize("max-cache-msg-size").Int64()
+
+	if maxCacheMsgSize < 0 {
+		maxCacheMsgSize = 0
+	}
 
 	consumerConfig := &rmq.PushConsumerConfig{
 		ClientConfig: rmq.ClientConfig{
@@ -114,7 +116,7 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		Model:               messageModel,
 		ThreadCount:         int(threadCount),
 		MessageBatchMaxSize: int(messageBatchMaxSize),
-		MaxCacheMessageSize: int(maxCacheMsgSize.Int64()),
+		MaxCacheMessageSize: int(maxCacheMsgSize),
 	}
 
 	pushConsumer, err := rmq.NewPushConsumer(consumerConfig)
@@ -129,7 +131,6 @@ func NewPushConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 
 		consumerConfig: consumerConfig,
 		pushConsumer:   pushConsumer,
-		messageChan:    messageChan,
 	}
 
 	return
