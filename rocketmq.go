@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/go-spirit/spirit/component"
@@ -33,6 +34,9 @@ type RocketMQComponent struct {
 	boundedMsgBox chan *rmq.MessageExt
 
 	alias string
+
+	producers    map[string]rmq.Producer
+	producerLock sync.RWMutex
 }
 
 func init() {
@@ -51,15 +55,25 @@ func (p *RocketMQComponent) Start() error {
 	return p.consumer.Start()
 }
 
-func (p *RocketMQComponent) Stop() error {
+func (p *RocketMQComponent) Stop() (err error) {
 
-	return p.consumer.Stop()
+	err = p.consumer.Stop()
+	if err != nil {
+		return
+	}
+
+	for _, producer := range p.producers {
+		producer.Shutdown()
+	}
+
+	return
 }
 
 func NewRocketMQComponent(alias string, opts ...component.Option) (comp component.Component, err error) {
 
 	rmqComp := &RocketMQComponent{
-		alias: alias,
+		alias:     alias,
+		producers: make(map[string]rmq.Producer),
 	}
 
 	err = rmqComp.init(opts...)
@@ -217,6 +231,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		Body:     msgBody,
 		Tags:     tags,
 		Property: propertyMap,
+		Keys:     payload.GetId(),
 	}
 
 	err = p.sendMessageToRMQ(pConfig, &msg)
@@ -239,11 +254,22 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	return
 }
 
-func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (err error) {
-	producer, err := rmq.NewProducer(config)
+func (p *RocketMQComponent) getProducer(config *rmq.ProducerConfig) (ret rmq.Producer, err error) {
+	key := fmt.Sprintf("%s:%s:%s", config.NameServer, config.GroupID, config.Credentials.String())
 
+	p.producerLock.RLock()
+	if producer, exist := p.producers[key]; exist {
+		ret = producer
+		p.producerLock.RUnlock()
+		return
+	}
+	p.producerLock.RUnlock()
+
+	p.producerLock.Lock()
+	defer p.producerLock.Unlock()
+
+	producer, err := rmq.NewProducer(config)
 	if err != nil {
-		err = errors.WithMessage(err, "create common producer failed")
 		return
 	}
 
@@ -252,7 +278,21 @@ func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rm
 		err = errors.WithMessage(err, "start common producer error")
 		return
 	}
-	defer producer.Shutdown()
+
+	p.producers[key] = producer
+
+	ret = producer
+
+	return
+}
+
+func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (err error) {
+	producer, err := p.getProducer(config)
+
+	if err != nil {
+		err = errors.WithMessage(err, "get producer failed")
+		return
+	}
 
 	sendResult, err := producer.SendMessageSync(msg)
 	if err != nil {

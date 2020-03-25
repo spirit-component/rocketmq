@@ -23,6 +23,8 @@ type PullConsumer struct {
 	queues       []rmq.MessageQueue
 	queueOffsets map[int]*int64
 
+	queueIDs map[int]bool
+
 	stopSignal chan struct{}
 }
 
@@ -32,10 +34,15 @@ func (p *PullConsumer) Start() (err error) {
 		return
 	}
 
-	p.queues = p.pullConsumer.FetchSubscriptionMessageQueues(p.topic)
+	queues := p.pullConsumer.FetchSubscriptionMessageQueues(p.topic)
 
-	for i := 0; i < len(p.queues); i++ {
-		p.queueOffsets[p.queues[i].ID] = new(int64)
+	// TODO: add more complex queue distributor, add queues count monitor and replancer
+	for i := 0; i < len(queues); i++ {
+		if p.queueIDs[queues[i].ID] {
+			p.queueOffsets[queues[i].ID] = new(int64)
+			p.initQueueOffset(queues[i])
+			p.queues = append(p.queues, queues[i])
+		}
 	}
 
 	p.stopSignal = make(chan struct{})
@@ -44,17 +51,28 @@ func (p *PullConsumer) Start() (err error) {
 
 	return
 }
+func (p *PullConsumer) initQueueOffset(mq rmq.MessageQueue) {
+	pullResult := p.pullConsumer.Pull(mq, p.expression, 0, 1)
+	atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.MaxOffset)
+
+	logrus.WithFields(
+		logrus.Fields{
+			"topic":       p.topic,
+			"queue-id":    mq.ID,
+			"expression":  p.expression,
+			"min-offset":  pullResult.MinOffset,
+			"max-offset":  pullResult.MaxOffset,
+			"next-offset": pullResult.NextBeginOffset,
+			"status":      pullResult.Status,
+		},
+	).Debugln("init queue offset")
+}
 
 func (p *PullConsumer) pull() {
 
 	for {
 		for _, mq := range p.queues {
 			pullResult := p.pullConsumer.Pull(mq, p.expression, atomic.LoadInt64(p.queueOffsets[mq.ID]), p.maxFetch)
-
-			if pullResult.NextBeginOffset < pullResult.MaxOffset {
-				atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.MaxOffset)
-				continue
-			}
 
 			switch pullResult.Status {
 			case rmq.PullNoNewMsg:
@@ -129,8 +147,14 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 	groupID := consumerConf.GetString("group-id")
 	topic := consumerConf.GetString("subscribe.topic")
 	expression := consumerConf.GetString("subscribe.expression", "*")
+	queueIDs := consumerConf.GetInt32List("subscribe.queue-ids")
 	maxFetch := consumerConf.GetInt32("max-fetch", 32)
 	instanceName := consumerConf.GetString("instance-name", "")
+
+	if len(queueIDs) == 0 {
+		err = fmt.Errorf("subscribe.queue-ids at least one id")
+		return
+	}
 
 	credentialName := consumerConf.GetString("credential-name")
 
@@ -161,6 +185,11 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		return
 	}
 
+	mapQueueIDs := map[int]bool{}
+	for _, id := range queueIDs {
+		mapQueueIDs[int(id)] = true
+	}
+
 	consumer = &PullConsumer{
 		topic:      topic,
 		expression: expression,
@@ -171,6 +200,7 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 		messageChan:    messageChan,
 
 		queueOffsets: make(map[int]*int64),
+		queueIDs:     mapQueueIDs,
 	}
 
 	return
