@@ -2,10 +2,10 @@ package rocketmq
 
 import (
 	"fmt"
+	"github.com/sirupsen/logrus"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/gogap/config"
-	"github.com/sirupsen/logrus"
 )
 
 type PushConsumer struct {
@@ -16,7 +16,8 @@ type PushConsumer struct {
 	expression string
 	retryTimes int
 
-	consumeFunc ConsumeFunc
+	consumeFunc     ConsumeFunc
+	consumeTokenBox chan struct{}
 }
 
 func (p *PushConsumer) Start() (err error) {
@@ -35,13 +36,28 @@ func (p *PushConsumer) Start() (err error) {
 }
 
 func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
-	err := p.consumeFunc(msg)
-	if err != nil {
-		if msg.ReconsumeTimes < p.retryTimes {
-			return rmq.ReConsumeLater
+
+	select {
+	case p.consumeTokenBox <- struct{}{}:
+		err := p.consumeFunc(msg)
+		<-p.consumeTokenBox
+
+		if err != nil {
+			logrus.Errorln(err)
+			if p.retryTimes == -1 {
+				return rmq.ReConsumeLater
+			} else if msg.ReconsumeTimes < p.retryTimes {
+				return rmq.ReConsumeLater
+			}
+			return rmq.ConsumeSuccess
 		}
+
+		return rmq.ConsumeSuccess
+	default:
+		// TokenBox is full
+		return rmq.ReConsumeLater
 	}
-	return rmq.ConsumeSuccess
+
 }
 
 func (p *PushConsumer) Stop() error {
@@ -57,7 +73,7 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 
 	topic := consumerConf.GetString("subscribe.topic")
 	expression := consumerConf.GetString("subscribe.expression", "*")
-	retryTimes := consumerConf.GetInt32("subscribe.retry-times", 0)
+	retryTimes := consumerConf.GetInt32("subscribe.retry-times", 0) // -1 always retry
 
 	credentialName := consumerConf.GetString("credential-name")
 
@@ -124,13 +140,21 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 		return
 	}
 
+	boxSize := consumerConf.GetInt32("token-box-size", 30)
+	if boxSize < 1 {
+		boxSize = 1
+	}
+
+	tokenBox := make(chan struct{}, int(boxSize))
+
 	consumer = &PushConsumer{
 		topic:      topic,
 		expression: expression,
 		retryTimes: int(retryTimes),
 
-		consumerConfig: consumerConfig,
-		pushConsumer:   pushConsumer,
+		consumerConfig:  consumerConfig,
+		pushConsumer:    pushConsumer,
+		consumeTokenBox: tokenBox,
 	}
 
 	return

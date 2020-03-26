@@ -31,8 +31,6 @@ type RocketMQComponent struct {
 
 	consumer rocketMQConsumer
 
-	boundedMsgBox chan *rmq.MessageExt
-
 	alias string
 
 	producers    map[string]rmq.Producer
@@ -98,16 +96,14 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 	}
 
 	mode := p.opts.Config.GetString("consumer.mode", "pull")
-	boxSize := p.opts.Config.GetInt32("consumer.bounded-msgbox-size", 30)
-
-	boundedMsgBox := make(chan *rmq.MessageExt, int(boxSize))
 
 	if mode == "pull" {
-		p.consumer, err = NewPullConsumer(boundedMsgBox, p.opts.Config)
+		p.consumer, err = NewPullConsumer(p.opts.Config)
 		if err != nil {
 			return
 		}
 	} else if mode == "push" {
+
 		p.consumer, err = NewPushConsumer(p.opts.Config)
 		if err != nil {
 			return
@@ -118,8 +114,6 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 	}
 
 	p.consumer.SetConsumerFunc(p.postMessage)
-
-	p.boundedMsgBox = boundedMsgBox
 
 	return
 }

@@ -19,7 +19,6 @@ type PullConsumer struct {
 	expression string
 	maxFetch   int
 
-	messageChan  chan<- *rmq.MessageExt
 	queues       []rmq.MessageQueue
 	queueOffsets map[int]*int64
 
@@ -37,6 +36,14 @@ func (p *PullConsumer) Start() (err error) {
 	queues := p.pullConsumer.FetchSubscriptionMessageQueues(p.topic)
 
 	// TODO: add more complex queue distributor, add queues count monitor and replancer
+	logrus.WithFields(
+		logrus.Fields{
+			"topic":       p.topic,
+			"queue-count": len(queues),
+			"expression":  p.expression,
+		},
+	).Debugln("Queues fetched")
+
 	for i := 0; i < len(queues); i++ {
 		if p.queueIDs[queues[i].ID] {
 			p.queueOffsets[queues[i].ID] = new(int64)
@@ -82,8 +89,11 @@ func (p *PullConsumer) pull() {
 					atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.NextBeginOffset)
 
 					for i := 0; i < len(pullResult.Messages); i++ {
-						p.consumeFunc(pullResult.Messages[i])
-						//TODO: process error
+						err := p.consumeFunc(pullResult.Messages[i])
+						if err != nil {
+							atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.Messages[i].QueueOffset)
+							break
+						}
 					}
 				}
 			case rmq.PullNoMatchedMsg:
@@ -139,7 +149,7 @@ func (p *PullConsumer) Stop() error {
 	return nil
 }
 
-func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configuration) (consumer *PullConsumer, err error) {
+func NewPullConsumer(conf config.Configuration) (consumer *PullConsumer, err error) {
 
 	consumerConf := conf.GetConfig("consumer")
 
@@ -197,7 +207,6 @@ func NewPullConsumer(messageChan chan<- *rmq.MessageExt, conf config.Configurati
 
 		consumerConfig: consumerConfig,
 		pullConsumer:   pullConsumer,
-		messageChan:    messageChan,
 
 		queueOffsets: make(map[int]*int64),
 		queueIDs:     mapQueueIDs,
