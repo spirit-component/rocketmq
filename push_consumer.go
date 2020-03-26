@@ -43,7 +43,14 @@ func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
 		<-p.consumeTokenBox
 
 		if err != nil {
-			logrus.Errorln(err)
+			logrus.WithFields(
+				logrus.Fields{
+					"topic":       p.topic,
+					"expression":  p.expression,
+					"name_server": p.consumerConfig.NameServer,
+				},
+			).Errorln(err)
+
 			if p.retryTimes == -1 {
 				return rmq.ReConsumeLater
 			} else if msg.ReconsumeTimes < p.retryTimes {
