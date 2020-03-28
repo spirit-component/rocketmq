@@ -41,7 +41,6 @@ func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
 	case p.consumeTokenBox <- struct{}{}:
 		err := p.consumeFunc(msg)
 		<-p.consumeTokenBox
-
 		if err != nil {
 			logrus.WithFields(
 				logrus.Fields{

@@ -122,11 +122,26 @@ func (p *RocketMQComponent) Route(mail.Session) worker.HandlerFunc {
 	return p.sendMessage
 }
 
+type MQSendResult struct {
+	Topic      string         `json:"topic"`
+	GroupID    string         `json:"group_id"`
+	NameServer string         `json:"name_server"`
+	Tags       string         `json:"tags"`
+	Keys       string         `json:"keys"`
+	Status     rmq.SendStatus `json:"status"`
+	MsgID      string         `json:"msg_id"`
+	Offset     int64          `json:"offset"`
+}
+
 func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 
 	logrus.WithField("component", "rocketmq").WithField("To", session.To()).Debugln("send message")
 
-	fbp.BreakSession(session)
+	setBody := session.Query("setbody")
+
+	if len(setBody) == 0 {
+		fbp.BreakSession(session)
+	}
 
 	port := fbp.GetSessionPort(session)
 
@@ -185,7 +200,22 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
-	payload, ok := session.Payload().Interface().(*protocol.Payload)
+	partition := session.Query("partition")
+	errorGraph := session.Query("error")
+	entrypointGraph := session.Query("entrypoint")
+
+	var sendSession mail.Session = session
+
+	if partition == "1" {
+		var newSession mail.Session
+		newSession, err = fbp.PartitionFromSession(session, entrypointGraph, errorGraph)
+		if err != nil {
+			return
+		}
+		sendSession = newSession
+	}
+
+	payload, ok := sendSession.Payload().Interface().(*protocol.Payload)
 	if !ok {
 		err = errors.New("could not convert session payload to *protocol.Payload")
 		return
@@ -228,22 +258,28 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		Keys:     payload.GetId(),
 	}
 
-	err = p.sendMessageToRMQ(pConfig, &msg)
+	sendResult, err := p.sendMessageToRMQ(pConfig, &msg)
 
 	if err != nil {
 		return
 	}
 
-	logrus.WithFields(
-		logrus.Fields{
-			"component":   "rocketmq",
-			"alias":       p.alias,
-			"topic":       topic,
-			"tags":        tags,
-			"name_server": nameserver,
-			"access_key":  accessKey,
-		},
-	).Debugln("Message sent")
+	if setBody == "1" {
+		err = session.Payload().Content().SetBody(
+			&MQSendResult{
+				Topic:      topic,
+				GroupID:    groupID,
+				NameServer: nameserver,
+				Tags:       tags,
+				Keys:       payload.GetId(),
+				Status:     sendResult.Status,
+				MsgID:      sendResult.MsgId,
+				Offset:     sendResult.Offset,
+			})
+		if err != nil {
+			return
+		}
+	}
 
 	return
 }
@@ -280,7 +316,7 @@ func (p *RocketMQComponent) getProducer(config *rmq.ProducerConfig) (ret rmq.Pro
 	return
 }
 
-func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (err error) {
+func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (result *rmq.SendResult, err error) {
 	producer, err := p.getProducer(config)
 
 	if err != nil {
@@ -293,7 +329,20 @@ func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rm
 		return
 	}
 
-	logrus.Debug(sendResult.String())
+	result = sendResult
+
+	logrus.WithFields(
+		logrus.Fields{
+			"component":   "rocketmq",
+			"alias":       p.alias,
+			"topic":       msg.Topic,
+			"tags":        msg.Tags,
+			"name_server": config.NameServer,
+			"access_key":  config.Credentials.AccessKey,
+			"key":         msg.Keys,
+			"result":      sendResult.String(),
+		},
+	).Debugln("Message sent")
 
 	return
 }
@@ -313,6 +362,7 @@ func (p *RocketMQComponent) postMessage(msg *rmq.MessageExt) (err error) {
 	}
 
 	graph, exist := payload.GetGraph(payload.GetCurrentGraph())
+
 	if !exist {
 		err = fmt.Errorf("could not get graph of %s in RocketMQComponent.postMessage", payload.GetCurrentGraph())
 		return
