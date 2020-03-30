@@ -48,19 +48,32 @@ func (p *PullConsumer) pull() {
 
 	for {
 		for _, mq := range p.queueTable.Queues() {
-			pullResult := p.pullConsumer.Pull(mq, p.expression, p.queueTable.CurrentOffset(mq.ID), p.maxFetch)
+			offset, errGetOffset := p.queueTable.CurrentOffset(mq.ID)
+			if errGetOffset != nil {
+				logrus.Errorln(errGetOffset)
+				break
+			}
+			pullResult := p.pullConsumer.Pull(mq, p.expression, offset, p.maxFetch)
 
 			switch pullResult.Status {
 			case rmq.PullNoNewMsg:
 			case rmq.PullFound:
 				{
 
-					p.queueTable.UpdateOffset(mq.ID, pullResult.NextBeginOffset)
+					err := p.queueTable.UpdateOffset(mq.ID, pullResult.NextBeginOffset)
+					if err != nil {
+						logrus.Errorln(err)
+						break
+					}
 
 					for i := 0; i < len(pullResult.Messages); i++ {
 						err := p.consumeFunc(pullResult.Messages[i])
 						if err != nil {
-							p.queueTable.UpdateOffset(mq.ID, pullResult.Messages[i].QueueOffset)
+							logrus.Errorln(err)
+							err = p.queueTable.UpdateOffset(mq.ID, pullResult.Messages[i].QueueOffset)
+							if err != nil {
+								logrus.Errorln(err)
+							}
 							break
 						}
 					}

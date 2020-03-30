@@ -58,9 +58,10 @@ func (p *InMemoryQueueTable) Start() (err error) {
 
 	logrus.WithFields(
 		logrus.Fields{
-			"topic":       p.consumerConf,
+			"topic":       p.topic,
 			"queue-count": len(queues),
 			"expression":  p.expression,
+			"provider":    "in-memory",
 		},
 	).Debugln("Queues fetched")
 
@@ -83,12 +84,13 @@ func (p *InMemoryQueueTable) Queues() []rmq.MessageQueue {
 	return p.queues
 }
 
-func (p *InMemoryQueueTable) CurrentOffset(queueID int) int64 {
-	return atomic.LoadInt64(p.queueOffsets[queueID])
+func (p *InMemoryQueueTable) CurrentOffset(queueID int) (ret int64, err error) {
+	return atomic.LoadInt64(p.queueOffsets[queueID]), nil
 }
 
-func (p *InMemoryQueueTable) UpdateOffset(queueID int, nextBeginOffset int64) {
+func (p *InMemoryQueueTable) UpdateOffset(queueID int, nextBeginOffset int64) error {
 	atomic.StoreInt64(p.queueOffsets[queueID], nextBeginOffset)
+	return nil
 }
 
 func (p *InMemoryQueueTable) initQueueOffset(mq rmq.MessageQueue) {
