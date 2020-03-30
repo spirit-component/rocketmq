@@ -27,7 +27,10 @@ components.rocketmq.endpoint_1 {
             subscribe = {
                 topic          = "API"
                 expression     = "*"     // https://rocketmq.apache.org/docs/filter-by-sql92-example/
-                queue-ids      = [0,1,2,3]
+                queue-table  {
+                    provider  = in-memory
+                    queue-ids = [0,1,2,3]
+                }
             }
         }
     }
