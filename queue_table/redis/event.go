@@ -65,7 +65,7 @@ func (p *RedisQueueTable) startEventListen() (err error) {
 						"topic":      p.topic,
 						"expression": p.expression,
 						"provider":   "redis",
-					}).Info("stopping redis event listen")
+					}).Info("redis event listen stopped")
 					return
 				}
 			}

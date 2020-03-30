@@ -106,16 +106,23 @@ func (p *RedisQueueTable) Start() (err error) {
 }
 
 func (p *RedisQueueTable) Stop() (err error) {
-	err = p.pubSubChannel.Close()
-	if err != nil {
-		return
-	}
 
 	logrus.WithFields(logrus.Fields{
 		"topic":      p.topic,
 		"expression": p.expression,
 		"provider":   "redis",
-	}).Info("redis event listen stopped")
+	}).Info("stopping redis event listen")
+
+	err = p.pubSubChannel.Unsubscribe()
+	if err != nil {
+		return
+	}
+
+	err = p.redisPool.Close()
+	if err != nil {
+		return
+	}
+
 	return
 }
 
