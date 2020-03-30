@@ -63,7 +63,7 @@ func (p *InMemoryQueueTable) Start() (err error) {
 			"expression":  p.expression,
 			"provider":    "in-memory",
 		},
-	).Debugln("Queues fetched")
+	).Debugln("queues fetched")
 
 	for i := 0; i < len(queues); i++ {
 		if p.queueIDs[queues[i].ID] {

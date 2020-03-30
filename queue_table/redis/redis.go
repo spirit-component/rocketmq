@@ -39,6 +39,9 @@ type RedisQueueTable struct {
 	redisPool *redis.Pool
 
 	queueLocker sync.RWMutex
+
+	eventChannel  string
+	pubSubChannel *redis.PubSubConn
 }
 
 func init() {
@@ -69,6 +72,11 @@ func NewRedisQueueTable(consumer rmq.PullConsumer, topic, expr string, consumerC
 		queueTableConf: queueTableConf,
 		queueOffsets:   make(map[int]*int64),
 		redisConfig:    redisConf,
+		eventChannel: strings.Join([]string{
+			redisConf.KeyPrefix,
+			topic,
+			"event",
+		}, ":"),
 	}
 
 	redisPool := &redis.Pool{
@@ -89,10 +97,25 @@ func (p *RedisQueueTable) Start() (err error) {
 		return
 	}
 
+	err = p.startEventListen()
+	if err != nil {
+		return
+	}
+
 	return
 }
 
 func (p *RedisQueueTable) Stop() (err error) {
+	err = p.pubSubChannel.Close()
+	if err != nil {
+		return
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"topic":      p.topic,
+		"expression": p.expression,
+		"provider":   "redis",
+	}).Info("redis event listen stopped")
 	return
 }
 
@@ -157,10 +180,6 @@ func (p *RedisQueueTable) initQueues() (err error) {
 	p.queueLocker.Lock()
 	defer p.queueLocker.Unlock()
 
-	if len(p.queues) > 0 {
-		p.queues = nil
-	}
-
 	queues := p.pullConsumer.FetchSubscriptionMessageQueues(p.topic)
 
 	logrus.WithFields(
@@ -170,7 +189,7 @@ func (p *RedisQueueTable) initQueues() (err error) {
 			"expression":  p.expression,
 			"provider":    "redis",
 		},
-	).Debugln("Queues fetched")
+	).Debugln("queues fetched")
 
 	key := strings.Join([]string{
 		p.redisConfig.KeyPrefix,
@@ -199,15 +218,19 @@ func (p *RedisQueueTable) initQueues() (err error) {
 		mapQueueIDs[int(id)] = true
 	}
 
+	var subQueues []rmq.MessageQueue
+
 	for i := 0; i < len(queues); i++ {
 		if mapQueueIDs[queues[i].ID] {
 			err = p.initQueueOffset(queues[i])
 			if err != nil {
 				return
 			}
-			p.queues = append(p.queues, queues[i])
+			subQueues = append(subQueues, queues[i])
 		}
 	}
+
+	p.queues = subQueues
 
 	return
 }

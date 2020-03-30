@@ -101,7 +101,7 @@ func (p *PullConsumer) pull() {
 					"topic":       p.topic,
 					"expression":  p.expression,
 					"name-server": p.consumerConfig.NameServer,
-				}).Info("Stopping pull consumer")
+				}).Info("stopping pull consumer")
 				p.stopSignal <- struct{}{}
 				return
 			}
@@ -112,6 +112,12 @@ func (p *PullConsumer) pull() {
 }
 
 func (p *PullConsumer) Stop() (err error) {
+
+	err = p.queueTable.Stop()
+	if err != nil {
+		return
+	}
+
 	if p.stopSignal != nil {
 
 		p.stopSignal <- struct{}{}
@@ -123,7 +129,7 @@ func (p *PullConsumer) Stop() (err error) {
 			"topic":       p.topic,
 			"expression":  p.expression,
 			"name-server": p.consumerConfig.NameServer,
-		}).Info("Pull consumer stopped")
+		}).Info("pull consumer stopped")
 
 		err = p.queueTable.Stop()
 		if err != nil {
