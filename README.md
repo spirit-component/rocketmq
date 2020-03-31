@@ -42,8 +42,6 @@ components.rocketmq.endpoint_1 {
 
 components.rocketmq.endpoint_2 {
 
-        bounded-msgbox-size = 64
-
         credentials = {
             c1 = {
                 access-key = "Your Access Key"
