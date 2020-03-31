@@ -48,10 +48,10 @@ func (p *PullConsumer) pull() {
 
 	for {
 		for _, mq := range p.queueTable.Queues() {
-			offset, errGetOffset := p.queueTable.CurrentOffset(mq.ID)
+			offset, errGetOffset := p.queueTable.CurrentOffset(mq.Broker, mq.ID)
 			if errGetOffset != nil {
 				logrus.Errorln(errGetOffset)
-				break
+				continue
 			}
 			pullResult := p.pullConsumer.Pull(mq, p.expression, offset, p.maxFetch)
 
@@ -60,17 +60,17 @@ func (p *PullConsumer) pull() {
 			case rmq.PullFound:
 				{
 
-					err := p.queueTable.UpdateOffset(mq.ID, pullResult.NextBeginOffset)
+					err := p.queueTable.UpdateOffset(mq.Broker, mq.ID, pullResult.NextBeginOffset)
 					if err != nil {
 						logrus.Errorln(err)
-						break
+						continue
 					}
 
 					for i := 0; i < len(pullResult.Messages); i++ {
 						err := p.consumeFunc(pullResult.Messages[i])
 						if err != nil {
 							logrus.Errorln(err)
-							err = p.queueTable.UpdateOffset(mq.ID, pullResult.Messages[i].QueueOffset)
+							err = p.queueTable.UpdateOffset(mq.Broker, mq.ID, pullResult.Messages[i].QueueOffset)
 							if err != nil {
 								logrus.Errorln(err)
 							}
@@ -79,9 +79,9 @@ func (p *PullConsumer) pull() {
 					}
 				}
 			case rmq.PullNoMatchedMsg:
-				p.queueTable.UpdateOffset(mq.ID, pullResult.NextBeginOffset)
+				p.queueTable.UpdateOffset(mq.Broker, mq.ID, pullResult.NextBeginOffset)
 			case rmq.PullOffsetIllegal:
-				p.queueTable.UpdateOffset(mq.ID, pullResult.NextBeginOffset)
+				p.queueTable.UpdateOffset(mq.Broker, mq.ID, pullResult.NextBeginOffset)
 			case rmq.PullBrokerTimeout:
 				logrus.WithFields(
 					logrus.Fields{
@@ -113,11 +113,6 @@ func (p *PullConsumer) pull() {
 
 func (p *PullConsumer) Stop() (err error) {
 
-	err = p.queueTable.Stop()
-	if err != nil {
-		return
-	}
-
 	if p.stopSignal != nil {
 
 		p.stopSignal <- struct{}{}
@@ -140,6 +135,11 @@ func (p *PullConsumer) Stop() (err error) {
 		if err != nil {
 			return
 		}
+	}
+
+	err = p.queueTable.Stop()
+	if err != nil {
+		return
 	}
 
 	return nil

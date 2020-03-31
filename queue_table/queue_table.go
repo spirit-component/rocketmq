@@ -18,8 +18,8 @@ type QueueTable interface {
 	Stop() error
 
 	Queues() []rmq.MessageQueue
-	CurrentOffset(queueID int) (int64, error)
-	UpdateOffset(queueID int, nextBeginOffset int64) error
+	CurrentOffset(broker string, queueID int) (int64, error)
+	UpdateOffset(broker string, queueID int, nextBeginOffset int64) error
 }
 
 func RegisterQueueTable(driverName string, fn NewQueueTableFunc) (err error) {

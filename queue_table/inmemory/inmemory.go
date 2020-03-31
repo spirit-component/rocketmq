@@ -19,7 +19,7 @@ type InMemoryQueueTable struct {
 	queueTableConf config.Configuration
 
 	queues       []rmq.MessageQueue
-	queueOffsets map[int]*int64
+	queueOffsets map[string]*int64
 	queueIDs     map[int]bool
 }
 
@@ -48,7 +48,7 @@ func NewInMemoryQueueTable(consumer rmq.PullConsumer, topic, expr string, consum
 		expression:     expr,
 		queueTableConf: queueTableConf,
 		queueIDs:       mapQueueIDs,
-		queueOffsets:   make(map[int]*int64),
+		queueOffsets:   make(map[string]*int64),
 	}, nil
 }
 
@@ -67,7 +67,8 @@ func (p *InMemoryQueueTable) Start() (err error) {
 
 	for i := 0; i < len(queues); i++ {
 		if p.queueIDs[queues[i].ID] {
-			p.queueOffsets[queues[i].ID] = new(int64)
+			key := fmt.Sprintf("%s:%d", queues[i].Broker, queues[i].ID)
+			p.queueOffsets[key] = new(int64)
 			p.initQueueOffset(queues[i])
 			p.queues = append(p.queues, queues[i])
 		}
@@ -84,22 +85,26 @@ func (p *InMemoryQueueTable) Queues() []rmq.MessageQueue {
 	return p.queues
 }
 
-func (p *InMemoryQueueTable) CurrentOffset(queueID int) (ret int64, err error) {
-	return atomic.LoadInt64(p.queueOffsets[queueID]), nil
+func (p *InMemoryQueueTable) CurrentOffset(broker string, queueID int) (ret int64, err error) {
+	key := fmt.Sprintf("%s:%d", broker, queueID)
+	return atomic.LoadInt64(p.queueOffsets[key]), nil
 }
 
-func (p *InMemoryQueueTable) UpdateOffset(queueID int, nextBeginOffset int64) error {
-	atomic.StoreInt64(p.queueOffsets[queueID], nextBeginOffset)
+func (p *InMemoryQueueTable) UpdateOffset(broker string, queueID int, nextBeginOffset int64) error {
+	key := fmt.Sprintf("%s:%d", broker, queueID)
+	atomic.StoreInt64(p.queueOffsets[key], nextBeginOffset)
 	return nil
 }
 
 func (p *InMemoryQueueTable) initQueueOffset(mq rmq.MessageQueue) {
 	pullResult := p.pullConsumer.Pull(mq, p.expression, 0, 1)
-	atomic.StoreInt64(p.queueOffsets[mq.ID], pullResult.MaxOffset)
+	key := fmt.Sprintf("%s:%d", mq.Broker, mq.ID)
+	atomic.StoreInt64(p.queueOffsets[key], pullResult.MaxOffset)
 
 	logrus.WithFields(
 		logrus.Fields{
 			"topic":       p.topic,
+			"broker":      mq.Broker,
 			"queue-id":    mq.ID,
 			"expression":  p.expression,
 			"min-offset":  pullResult.MinOffset,

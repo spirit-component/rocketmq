@@ -134,7 +134,7 @@ func (p *RedisQueueTable) Queues() (queues []rmq.MessageQueue) {
 	return queues
 }
 
-func (p *RedisQueueTable) CurrentOffset(queueID int) (ret int64, err error) {
+func (p *RedisQueueTable) CurrentOffset(broker string, queueID int) (ret int64, err error) {
 
 	conn := p.redisPool.Get()
 	defer conn.Close()
@@ -144,6 +144,7 @@ func (p *RedisQueueTable) CurrentOffset(queueID int) (ret int64, err error) {
 		p.topic,
 		p.expression,
 		p.consumerConf.InstanceName,
+		broker,
 		"queue",
 		strconv.Itoa(queueID),
 	}, ":")
@@ -159,7 +160,7 @@ func (p *RedisQueueTable) CurrentOffset(queueID int) (ret int64, err error) {
 	return
 }
 
-func (p *RedisQueueTable) UpdateOffset(queueID int, nextBeginOffset int64) (err error) {
+func (p *RedisQueueTable) UpdateOffset(broker string, queueID int, nextBeginOffset int64) (err error) {
 
 	conn := p.redisPool.Get()
 	defer conn.Close()
@@ -169,6 +170,7 @@ func (p *RedisQueueTable) UpdateOffset(queueID int, nextBeginOffset int64) (err 
 		p.topic,
 		p.expression,
 		p.consumerConf.InstanceName,
+		broker,
 		"queue",
 		strconv.Itoa(queueID),
 	}, ":")
@@ -198,42 +200,62 @@ func (p *RedisQueueTable) initQueues() (err error) {
 		},
 	).Debugln("queues fetched")
 
-	key := strings.Join([]string{
-		p.redisConfig.KeyPrefix,
-		p.topic,
-		p.consumerConf.InstanceName,
-		"queues",
-	}, ":")
+	brokers := map[string]bool{}
 
-	conn := p.redisPool.Get()
-	defer conn.Close()
-
-	queueIDs, err := redis.Ints(conn.Do("SMEMBERS", key))
-	if err != nil {
-		err = errors.WithMessagef(err, "get queues failure, key: %s", key)
-		return
-	}
-
-	if len(queueIDs) == 0 {
-		logrus.WithField("key", key).Warnln("queue list is empty")
-	} else {
-		logrus.WithField("queues", queueIDs).WithField("key", key).Debug("queues subscribed")
-	}
-
-	mapQueueIDs := map[int]bool{}
-	for _, id := range queueIDs {
-		mapQueueIDs[int(id)] = true
+	for _, q := range queues {
+		brokers[q.Broker] = true
 	}
 
 	var subQueues []rmq.MessageQueue
+	for broker := range brokers {
 
-	for i := 0; i < len(queues); i++ {
-		if mapQueueIDs[queues[i].ID] {
-			err = p.initQueueOffset(queues[i])
-			if err != nil {
-				return
+		key := strings.Join([]string{
+			p.redisConfig.KeyPrefix,
+			p.topic,
+			p.consumerConf.InstanceName,
+			broker,
+			"queues",
+		}, ":")
+
+		conn := p.redisPool.Get()
+		defer conn.Close()
+
+		var queueIDs []int
+		queueIDs, err = redis.Ints(conn.Do("SMEMBERS", key))
+		if err != nil {
+			err = errors.WithMessagef(err, "get queues failure, key: %s", key)
+			return
+		}
+
+		if len(queueIDs) == 0 {
+			logrus.WithFields(
+				logrus.Fields{"broker": broker,
+					"queues": queueIDs,
+					"topic":  p.topic,
+					"key":    key,
+				}).Warnln("queue list is empty")
+		} else {
+			logrus.WithFields(
+				logrus.Fields{"broker": broker,
+					"queues": queueIDs,
+					"topic":  p.topic,
+					"key":    key,
+				}).Debug("queues subscribed")
+		}
+
+		mapQueueIDs := map[int]bool{}
+		for _, id := range queueIDs {
+			mapQueueIDs[int(id)] = true
+		}
+
+		for i := 0; i < len(queues); i++ {
+			if mapQueueIDs[queues[i].ID] {
+				err = p.initQueueOffset(queues[i])
+				if err != nil {
+					return
+				}
+				subQueues = append(subQueues, queues[i])
 			}
-			subQueues = append(subQueues, queues[i])
 		}
 	}
 
@@ -252,6 +274,7 @@ func (p *RedisQueueTable) initQueueOffset(mq rmq.MessageQueue) (err error) {
 		p.topic,
 		p.expression,
 		p.consumerConf.InstanceName,
+		mq.Broker,
 		"queue",
 		strconv.Itoa(mq.ID),
 	}, ":")
