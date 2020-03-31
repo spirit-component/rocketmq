@@ -1,6 +1,7 @@
 package rocketmq
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/gogap/config"
 	"github.com/sirupsen/logrus"
 	"github.com/spirit-component/rocketmq/queue_table"
+	"golang.org/x/time/rate"
 
 	_ "github.com/spirit-component/rocketmq/queue_table/inmemory"
 )
@@ -24,6 +26,8 @@ type PullConsumer struct {
 	queueTable queue_table.QueueTable
 
 	stopSignal chan struct{}
+
+	limiter *rate.Limiter
 }
 
 func (p *PullConsumer) Start() (err error) {
@@ -46,6 +50,8 @@ func (p *PullConsumer) Start() (err error) {
 
 func (p *PullConsumer) pull() {
 
+	ctx, _ := context.WithCancel(context.TODO())
+
 	for {
 		for _, mq := range p.queueTable.Queues() {
 			offset, errGetOffset := p.queueTable.CurrentOffset(mq.Broker, mq.ID)
@@ -67,6 +73,9 @@ func (p *PullConsumer) pull() {
 					}
 
 					for i := 0; i < len(pullResult.Messages); i++ {
+
+						p.limiter.Wait(ctx)
+
 						err := p.consumeFunc(pullResult.Messages[i])
 						if err != nil {
 							logrus.Errorln(err)
@@ -87,6 +96,7 @@ func (p *PullConsumer) pull() {
 					logrus.Fields{
 						"topic":       p.topic,
 						"expression":  p.expression,
+						"broker":      mq.Broker,
 						"name_server": p.consumerConfig.NameServer,
 					},
 				).Warnln("pull broker timeout")
@@ -100,7 +110,7 @@ func (p *PullConsumer) pull() {
 				logrus.WithFields(logrus.Fields{
 					"topic":       p.topic,
 					"expression":  p.expression,
-					"name-server": p.consumerConfig.NameServer,
+					"name_server": p.consumerConfig.NameServer,
 				}).Info("stopping pull consumer")
 				p.stopSignal <- struct{}{}
 				return
@@ -123,7 +133,7 @@ func (p *PullConsumer) Stop() (err error) {
 		logrus.WithFields(logrus.Fields{
 			"topic":       p.topic,
 			"expression":  p.expression,
-			"name-server": p.consumerConfig.NameServer,
+			"name_server": p.consumerConfig.NameServer,
 		}).Info("pull consumer stopped")
 
 		err = p.queueTable.Stop()
@@ -193,6 +203,20 @@ func NewPullConsumer(conf config.Configuration) (consumer *PullConsumer, err err
 		return
 	}
 
+	qps := consumerConf.GetFloat64("rate-limit.qps", 1000)
+	bucketSize := consumerConf.GetInt32("rate-limit.bucket-size", 1)
+
+	logrus.WithFields(
+		logrus.Fields{
+			"topic":         topic,
+			"expression":    expression,
+			"name_server":   consumerConfig.NameServer,
+			"instance_name": instanceName,
+			"qps":           qps,
+			"bucket_size":   bucketSize,
+		},
+	).Debug("rate limit configured")
+
 	consumer = &PullConsumer{
 		topic:      topic,
 		expression: expression,
@@ -202,6 +226,7 @@ func NewPullConsumer(conf config.Configuration) (consumer *PullConsumer, err err
 		pullConsumer:   pullConsumer,
 
 		queueTable: queueTable,
+		limiter:    rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
 	}
 
 	return

@@ -2,10 +2,11 @@ package rocketmq
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
 	"github.com/gogap/config"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 type PushConsumer struct {
@@ -16,8 +17,9 @@ type PushConsumer struct {
 	expression string
 	retryTimes int
 
-	consumeFunc     ConsumeFunc
-	consumeTokenBox chan struct{}
+	consumeFunc ConsumeFunc
+
+	limiter *rate.Limiter
 }
 
 func (p *PushConsumer) Start() (err error) {
@@ -37,33 +39,34 @@ func (p *PushConsumer) Start() (err error) {
 
 func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
 
-	select {
-	case p.consumeTokenBox <- struct{}{}:
-		err := p.consumeFunc(msg)
-		<-p.consumeTokenBox
-		if err != nil {
-			logrus.WithFields(
-				logrus.Fields{
-					"topic":       p.topic,
-					"expression":  p.expression,
-					"name_server": p.consumerConfig.NameServer,
-				},
-			).Errorln(err)
-
-			if p.retryTimes == -1 {
-				return rmq.ReConsumeLater
-			} else if msg.ReconsumeTimes < p.retryTimes {
-				return rmq.ReConsumeLater
-			}
-			return rmq.ConsumeSuccess
-		}
-
-		return rmq.ConsumeSuccess
-	default:
-		// TokenBox is full
+	if !p.limiter.Allow() {
 		return rmq.ReConsumeLater
 	}
 
+	err := p.consumeFunc(msg)
+
+	if err != nil {
+		logrus.WithFields(
+			logrus.Fields{
+				"topic":       p.topic,
+				"expression":  p.expression,
+				"queue_id":    msg.QueueId,
+				"message_id":  msg.MessageID,
+				"tags":        msg.Tags,
+				"keys":        msg.Keys,
+				"name_server": p.consumerConfig.NameServer,
+			},
+		).Errorln(err)
+
+		if p.retryTimes == -1 {
+			return rmq.ReConsumeLater
+		} else if msg.ReconsumeTimes < p.retryTimes {
+			return rmq.ReConsumeLater
+		}
+		return rmq.ConsumeSuccess
+	}
+
+	return rmq.ConsumeSuccess
 }
 
 func (p *PushConsumer) Stop() error {
@@ -146,21 +149,27 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 		return
 	}
 
-	boxSize := consumerConf.GetInt32("token-box-size", 30)
-	if boxSize < 1 {
-		boxSize = 1
-	}
+	qps := consumerConf.GetFloat64("rate-limit.qps", 1000)
+	bucketSize := consumerConf.GetInt32("rate-limit.bucket-size", 1)
 
-	tokenBox := make(chan struct{}, int(boxSize))
+	logrus.WithFields(
+		logrus.Fields{
+			"topic":       topic,
+			"expression":  expression,
+			"name_server": consumerConfig.NameServer,
+			"qps":         qps,
+			"bucket_size": bucketSize,
+		},
+	).Debug("rate limit configured")
 
 	consumer = &PushConsumer{
 		topic:      topic,
 		expression: expression,
 		retryTimes: int(retryTimes),
 
-		consumerConfig:  consumerConfig,
-		pushConsumer:    pushConsumer,
-		consumeTokenBox: tokenBox,
+		consumerConfig: consumerConfig,
+		pushConsumer:   pushConsumer,
+		limiter:        rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
 	}
 
 	return

@@ -7,8 +7,6 @@ config example
 
 components.rocketmq.endpoint_1 {
 
-        bounded-msgbox-size = 64
-
         credentials = {
             c1 = {
                 access-key = "Your Access Key"
@@ -18,6 +16,12 @@ components.rocketmq.endpoint_1 {
         }
 
         consumer {
+
+            rate-limit {
+                qps = 1000
+                bucket-size = 1
+            }
+
             credential-name = "c1"
             mode            = "pull"
             name-server     = "http://127.0.0.1:9876"
