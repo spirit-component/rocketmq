@@ -169,35 +169,37 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
-	nameserver, exist := port.Metadata["name_server"]
-	if !exist {
-		err = fmt.Errorf("port metadata of '%s' is not exist", "name_server")
+	nameServer := session.Query("name_server")
+	accessKey := session.Query("access_key")
+	secretKey := session.Query("secret_key")
+	channel := session.Query("channel")
+	credentialName := session.Query("credential_name")
+
+	if len(nameServer) == 0 {
+		nameServer = port.Metadata["name_server"]
+	}
+
+	if len(nameServer) == 0 {
+		err = fmt.Errorf("unknown name server in rocketmq component while send message, port to url: %s", port.Url)
 		return
 	}
 
-	property, _ := port.Metadata["property"]
-
-	accessKey, exist := port.Metadata["access_key"]
-	if !exist {
-		err = fmt.Errorf("port metadata of '%s' is not exist", "access_key")
-		return
+	if len(credentialName) > 0 {
+		accessKey = p.opts.Config.GetString("credentials." + credentialName + ".access-key")
+		secretKey = p.opts.Config.GetString("credentials." + credentialName + ".secret-key")
+		channel = p.opts.Config.GetString("credentials." + credentialName + ".channel")
 	}
 
-	secretKey, exist := port.Metadata["secret_key"]
-	if !exist {
-		err = fmt.Errorf("port metadata of '%s' is not exist", "secret_key")
-		return
+	if len(accessKey) == 0 {
+		accessKey = port.Metadata["access_key"]
 	}
 
-	channel, exist := port.Metadata["channel"]
-	if !exist {
-		err = fmt.Errorf("port metadata of '%s' is not exist", "channel")
-		return
+	if len(secretKey) == 0 {
+		secretKey = port.Metadata["secret_key"]
 	}
 
-	if len(nameserver) == 0 {
-		err = fmt.Errorf("unknown nameserver in rocketmq component while send message, port to url: %s", port.Url)
-		return
+	if len(channel) == 0 {
+		channel = port.Metadata["channel"]
 	}
 
 	partition := session.Query("partition")
@@ -231,7 +233,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	pConfig := &rmq.ProducerConfig{
 		ClientConfig: rmq.ClientConfig{
 			GroupID:    groupID,
-			NameServer: nameserver,
+			NameServer: nameServer,
 			Credentials: &rmq.SessionCredentials{
 				AccessKey: accessKey,
 				SecretKey: secretKey,
@@ -242,6 +244,9 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	}
 
 	propertyMap := map[string]string{}
+
+	property, _ := port.Metadata["property"]
+
 	if len(property) > 0 {
 		err = json.Unmarshal([]byte(property), &propertyMap)
 		if err != nil {
@@ -269,7 +274,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 			&MQSendResult{
 				Topic:      topic,
 				GroupID:    groupID,
-				NameServer: nameserver,
+				NameServer: nameServer,
 				Tags:       tags,
 				Keys:       payload.GetId(),
 				Status:     sendResult.Status,
