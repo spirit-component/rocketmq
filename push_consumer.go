@@ -1,21 +1,24 @@
 package rocketmq
 
 import (
+	"context"
 	"fmt"
 
-	rmq "github.com/apache/rocketmq-client-go/core"
+	rmq "github.com/apache/rocketmq-client-go"
+	"github.com/apache/rocketmq-client-go/consumer"
+	"github.com/apache/rocketmq-client-go/primitive"
 	"github.com/gogap/config"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
 type PushConsumer struct {
-	consumerConfig *rmq.PushConsumerConfig
-	pushConsumer   rmq.PushConsumer
+	consumerOptions []consumer.Option
+	pushConsumer    rmq.PushConsumer
 
-	topic      string
-	expression string
-	retryTimes int
+	topic           string
+	messageSelector consumer.MessageSelector
+	retryTimes      int32
 
 	consumeFunc ConsumeFunc
 
@@ -24,7 +27,7 @@ type PushConsumer struct {
 
 func (p *PushConsumer) Start() (err error) {
 
-	err = p.pushConsumer.Subscribe(p.topic, p.expression, p.consume)
+	err = p.pushConsumer.Subscribe(p.topic, p.messageSelector, p.consume)
 	if err != nil {
 		return
 	}
@@ -37,52 +40,63 @@ func (p *PushConsumer) Start() (err error) {
 	return
 }
 
-func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
+func (p *PushConsumer) consume(ctx context.Context, messages ...*primitive.MessageExt) (result consumer.ConsumeResult, err error) {
 
 	if !p.limiter.Allow() {
-		return rmq.ReConsumeLater
+		return consumer.ConsumeRetryLater, nil
 	}
 
-	err := p.consumeFunc(msg)
+	if len(messages) != 1 {
+		err = fmt.Errorf("could not consume message greater than 1")
+		return
+	}
+
+	err = p.consumeFunc(messages[0])
 
 	if err != nil {
 		logrus.WithFields(
 			logrus.Fields{
-				"topic":       p.topic,
-				"expression":  p.expression,
-				"queue_id":    msg.QueueId,
-				"message_id":  msg.MessageID,
-				"tags":        msg.Tags,
-				"keys":        msg.Keys,
-				"name_server": p.consumerConfig.NameServer,
+				"topic":           p.topic,
+				"expression":      p.messageSelector.Expression,
+				"keys":            messages[0].GetKeys(),
+				"message_id":      messages[0].MsgId,
+				"tags":            messages[0].GetTags(),
+				"reconsume_times": messages[0].ReconsumeTimes,
+				"born_host":       messages[0].BornHost,
 			},
 		).Errorln(err)
 
 		if p.retryTimes == -1 {
-			return rmq.ReConsumeLater
-		} else if msg.ReconsumeTimes < p.retryTimes {
-			return rmq.ReConsumeLater
+			return consumer.ConsumeRetryLater, nil
+		} else if messages[0].ReconsumeTimes < p.retryTimes {
+			return consumer.ConsumeRetryLater, nil
 		}
-		return rmq.ConsumeSuccess
+		return consumer.ConsumeSuccess, nil
 	}
 
-	return rmq.ConsumeSuccess
+	return consumer.ConsumeSuccess, nil
 }
 
 func (p *PushConsumer) Stop() error {
 	return p.pushConsumer.Shutdown()
 }
 
-func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err error) {
+func NewPushConsumer(conf config.Configuration) (ret *PushConsumer, err error) {
 
 	consumerConf := conf.GetConfig("consumer")
 
-	nameServer := consumerConf.GetString("name-server")
+	nameServer := consumerConf.GetStringList("name-server")
+	nameServerDomain := consumerConf.GetString("name-server-domain")
 	groupID := consumerConf.GetString("group-id")
 
+	vipChannel := consumerConf.GetBoolean("vip-channel", false)
 	topic := consumerConf.GetString("subscribe.topic")
 	expression := consumerConf.GetString("subscribe.expression", "*")
+	expressionType := consumerConf.GetString("subscribe.expression-type", "TAG")
 	retryTimes := consumerConf.GetInt32("subscribe.retry-times", 0) // -1 always retry
+	autoCommit := consumerConf.GetBoolean("auto-commit", true)
+	instanceName := consumerConf.GetString("instance-name", "")
+	namespace := consumerConf.GetString("namespace")
 
 	credentialName := consumerConf.GetString("credential-name")
 
@@ -95,56 +109,57 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 	secretKey := conf.GetString("credentials." + credentialName + ".secret-key")
 	channel := conf.GetString("credentials." + credentialName + ".channel")
 
-	var messageModel rmq.MessageModel
+	var messageModel consumer.MessageModel
 	switch consumerConf.GetString("message-model", "clustering") {
 	case "clustering":
 		{
-			messageModel = rmq.Clustering
+			messageModel = consumer.Clustering
 		}
 	case "broadcasting":
 		{
-			messageModel = rmq.BroadCasting
+			messageModel = consumer.BroadCasting
 		}
 	}
 
-	var consumerModel rmq.ConsumerModel
+	withConsumerOrder := false
 	switch consumerConf.GetString("consumer-model", "cocurrently") {
 	case "cocurrently":
 		{
-			consumerModel = rmq.CoCurrently
+			withConsumerOrder = false
 		}
 	case "orderly":
 		{
-			consumerModel = rmq.Orderly
+			withConsumerOrder = true
 		}
 	}
 
-	threadCount := consumerConf.GetInt32("thread-count", 0)
-	messageBatchMaxSize := consumerConf.GetInt32("msg-batch-max-size", 0)
+	// messageBatchMaxSize := consumerConf.GetInt32("msg-batch-max-size", 1)
 	maxCacheMsgSize := consumerConf.GetByteSize("max-cache-msg-size").Int64()
 
 	if maxCacheMsgSize < 0 {
 		maxCacheMsgSize = 0
 	}
 
-	consumerConfig := &rmq.PushConsumerConfig{
-		ClientConfig: rmq.ClientConfig{
-			GroupID:    groupID,
-			NameServer: nameServer,
-			Credentials: &rmq.SessionCredentials{
-				AccessKey: accessKey,
-				SecretKey: secretKey,
-				Channel:   channel,
-			},
-		},
-		ConsumerModel:       consumerModel,
-		Model:               messageModel,
-		ThreadCount:         int(threadCount),
-		MessageBatchMaxSize: int(messageBatchMaxSize),
-		MaxCacheMessageSize: int(maxCacheMsgSize),
-	}
+	pushConsumer, err := rmq.NewPushConsumer(
+		consumer.WithInstance(instanceName),
+		consumer.WithVIPChannel(vipChannel),
+		consumer.WithGroupName(groupID),
+		consumer.WithNameServer(nameServer),
+		consumer.WithNameServerDomain(nameServerDomain),
+		consumer.WithNamespace(namespace),
+		consumer.WithCredentials(
+			primitive.Credentials{
+				AccessKey:     accessKey,
+				SecretKey:     secretKey,
+				SecurityToken: channel,
+			}),
+		consumer.WithConsumeMessageBatchMaxSize(1), // TODO: use real size
+		consumer.WithAutoCommit(autoCommit),
+		consumer.WithConsumerOrder(withConsumerOrder),
+		consumer.WithConsumerModel(messageModel),
+		consumer.WithConsumeFromWhere(consumer.ConsumeFromLastOffset), // TODO: make configureable
+	)
 
-	pushConsumer, err := rmq.NewPushConsumer(consumerConfig)
 	if err != nil {
 		return
 	}
@@ -156,20 +171,22 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 		logrus.Fields{
 			"topic":       topic,
 			"expression":  expression,
-			"name_server": consumerConfig.NameServer,
 			"qps":         qps,
 			"bucket_size": bucketSize,
 		},
 	).Debug("rate limit configured")
 
-	consumer = &PushConsumer{
-		topic:      topic,
-		expression: expression,
-		retryTimes: int(retryTimes),
+	messageSelector := consumer.MessageSelector{
+		Type:       consumer.ExpressionType(expressionType),
+		Expression: expression,
+	}
 
-		consumerConfig: consumerConfig,
-		pushConsumer:   pushConsumer,
-		limiter:        rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
+	ret = &PushConsumer{
+		topic:           topic,
+		messageSelector: messageSelector,
+		retryTimes:      retryTimes,
+		pushConsumer:    pushConsumer,
+		limiter:         rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
 	}
 
 	return

@@ -95,7 +95,7 @@ func (p *RedisQueueTable) onChannelMessage(channel string, data []byte) (err err
 
 	instanceName := event.Args.Get("instance-name")
 	if len(instanceName) > 0 {
-		if instanceName != p.consumerConf.InstanceName {
+		if instanceName != p.instanceName {
 			return
 		}
 	}

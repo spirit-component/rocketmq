@@ -3,11 +3,12 @@ package queue_table
 import (
 	"fmt"
 
-	rmq "github.com/apache/rocketmq-client-go/core"
+	rmq "github.com/apache/rocketmq-client-go"
+	"github.com/apache/rocketmq-client-go/primitive"
 	"github.com/gogap/config"
 )
 
-type NewQueueTableFunc func(consumer rmq.PullConsumer, topic, expr string, consumerConf *rmq.PullConsumerConfig, queueTableConf config.Configuration) (QueueTable, error)
+type NewQueueTableFunc func(consumer rmq.PullConsumer, topic, expr, instanceName string, queueTableConf config.Configuration) (QueueTable, error)
 
 var (
 	queueTables = make(map[string]NewQueueTableFunc)
@@ -17,9 +18,7 @@ type QueueTable interface {
 	Start() error
 	Stop() error
 
-	Queues() []rmq.MessageQueue
-	CurrentOffset(broker string, queueID int) (int64, error)
-	UpdateOffset(broker string, queueID int, nextBeginOffset int64) error
+	Queues() []primitive.MessageQueue
 }
 
 func RegisterQueueTable(driverName string, fn NewQueueTableFunc) (err error) {
@@ -44,7 +43,7 @@ func RegisterQueueTable(driverName string, fn NewQueueTableFunc) (err error) {
 	return
 }
 
-func NewQueueTable(driverName string, consumer rmq.PullConsumer, topic, expr string, consumerConf *rmq.PullConsumerConfig, queueTableConf config.Configuration) (table QueueTable, err error) {
+func NewQueueTable(driverName string, consumer rmq.PullConsumer, topic, expr, instanceName string, queueTableConf config.Configuration) (table QueueTable, err error) {
 
 	if len(driverName) == 0 {
 		err = fmt.Errorf("queue table driver name is empty")
@@ -62,5 +61,5 @@ func NewQueueTable(driverName string, consumer rmq.PullConsumer, topic, expr str
 		return
 	}
 
-	return fn(consumer, topic, expr, consumerConf, queueTableConf)
+	return fn(consumer, topic, expr, instanceName, queueTableConf)
 }

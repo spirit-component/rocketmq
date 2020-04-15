@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	rmq "github.com/apache/rocketmq-client-go/core"
+	rmq "github.com/apache/rocketmq-client-go"
 	"github.com/gogap/config"
 	"github.com/sirupsen/logrus"
 	"github.com/spirit-component/rocketmq/queue_table"
@@ -16,18 +16,18 @@ type InMemoryQueueTable struct {
 
 	topic          string
 	expression     string
+	instanceName   string
 	queueTableConf config.Configuration
 
-	queues       []rmq.MessageQueue
-	queueOffsets map[string]*int64
-	queueIDs     map[int]bool
+	queues   []rmq.MessageQueue
+	queueIDs map[int]bool
 }
 
 func init() {
 	queue_table.RegisterQueueTable("in-memory", NewInMemoryQueueTable)
 }
 
-func NewInMemoryQueueTable(consumer rmq.PullConsumer, topic, expr string, consumerConf *rmq.PullConsumerConfig, queueTableConf config.Configuration) (table queue_table.QueueTable, err error) {
+func NewInMemoryQueueTable(consumer rmq.PullConsumer, topic, expr, instanceName string, queueTableConf config.Configuration) (table queue_table.QueueTable, err error) {
 
 	queueIDs := queueTableConf.GetInt32List("queue-ids")
 
@@ -43,7 +43,7 @@ func NewInMemoryQueueTable(consumer rmq.PullConsumer, topic, expr string, consum
 
 	return &InMemoryQueueTable{
 		pullConsumer:   consumer,
-		consumerConf:   consumerConf,
+		instanceName:   instanceName,
 		topic:          topic,
 		expression:     expr,
 		queueTableConf: queueTableConf,
@@ -83,34 +83,4 @@ func (p *InMemoryQueueTable) Stop() (err error) {
 
 func (p *InMemoryQueueTable) Queues() []rmq.MessageQueue {
 	return p.queues
-}
-
-func (p *InMemoryQueueTable) CurrentOffset(broker string, queueID int) (ret int64, err error) {
-	key := fmt.Sprintf("%s:%d", broker, queueID)
-	return atomic.LoadInt64(p.queueOffsets[key]), nil
-}
-
-func (p *InMemoryQueueTable) UpdateOffset(broker string, queueID int, nextBeginOffset int64) error {
-	key := fmt.Sprintf("%s:%d", broker, queueID)
-	atomic.StoreInt64(p.queueOffsets[key], nextBeginOffset)
-	return nil
-}
-
-func (p *InMemoryQueueTable) initQueueOffset(mq rmq.MessageQueue) {
-	pullResult := p.pullConsumer.Pull(mq, p.expression, 0, 1)
-	key := fmt.Sprintf("%s:%d", mq.Broker, mq.ID)
-	atomic.StoreInt64(p.queueOffsets[key], pullResult.MaxOffset)
-
-	logrus.WithFields(
-		logrus.Fields{
-			"topic":       p.topic,
-			"broker":      mq.Broker,
-			"queue-id":    mq.ID,
-			"expression":  p.expression,
-			"min-offset":  pullResult.MinOffset,
-			"max-offset":  pullResult.MaxOffset,
-			"next-offset": pullResult.NextBeginOffset,
-			"status":      pullResult.Status,
-		},
-	).Debugln("init queue offset")
 }

@@ -1,12 +1,17 @@
 package rocketmq
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
-	rmq "github.com/apache/rocketmq-client-go/core"
+	rmq "github.com/apache/rocketmq-client-go"
+	"github.com/apache/rocketmq-client-go/primitive"
 	"github.com/go-spirit/spirit/component"
 	"github.com/go-spirit/spirit/doc"
 	"github.com/go-spirit/spirit/mail"
@@ -16,9 +21,11 @@ import (
 	"github.com/go-spirit/spirit/worker/fbp/protocol"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	"github.com/apache/rocketmq-client-go/producer"
 )
 
-type ConsumeFunc func(msg *rmq.MessageExt) (err error)
+type ConsumeFunc func(msg *primitive.MessageExt) (err error)
 
 type rocketMQConsumer interface {
 	SetConsumerFunc(fn ConsumeFunc)
@@ -103,7 +110,6 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 			return
 		}
 	} else if mode == "push" {
-
 		p.consumer, err = NewPushConsumer(p.opts.Config)
 		if err != nil {
 			return
@@ -123,14 +129,14 @@ func (p *RocketMQComponent) Route(mail.Session) worker.HandlerFunc {
 }
 
 type MQSendResult struct {
-	Topic      string         `json:"topic"`
-	GroupID    string         `json:"group_id"`
-	NameServer string         `json:"name_server"`
-	Tags       string         `json:"tags"`
-	Keys       string         `json:"keys"`
-	Status     rmq.SendStatus `json:"status"`
-	MsgID      string         `json:"msg_id"`
-	Offset     int64          `json:"offset"`
+	Topic      string `json:"topic"`
+	GroupID    string `json:"group_id"`
+	NameServer string `json:"name_server"`
+	Tags       string `json:"tags"`
+	Keys       string `json:"keys"`
+	Status     int    `json:"status"`
+	MsgID      string `json:"msg_id"`
+	Offset     int64  `json:"offset"`
 }
 
 func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
@@ -164,25 +170,32 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
-	if len(tags) == 0 {
-		err = fmt.Errorf("query of %s is empty", "tags")
-		return
-	}
-
 	nameServer := session.Query("name_server")
+	nameServerDomain := session.Query("name_server_domain")
 	accessKey := session.Query("access_key")
 	secretKey := session.Query("secret_key")
 	channel := session.Query("channel")
+	namespace := session.Query("namespace")
+	vipChannel := session.Query("vip_channel")
+	sendTimeout := session.Query("send_timeout")
+	retryTimes := session.Query("retry")
 	credentialName := session.Query("credential_name")
+	delayLevel := session.Query("delay_level")
 
 	if len(nameServer) == 0 {
 		nameServer = port.Metadata["name_server"]
 	}
 
-	if len(nameServer) == 0 {
-		err = fmt.Errorf("unknown name server in rocketmq component while send message, port to url: %s", port.Url)
+	if len(nameServerDomain) == 0 {
+		nameServerDomain = port.Metadata["name_server_domain"]
+	}
+
+	if len(nameServer) == 0 && len(nameServerDomain) == 0 {
+		err = fmt.Errorf("unknown name server or domain in rocketmq component while send message, port to url: %s", port.Url)
 		return
 	}
+
+	nameServerList := strings.Split(nameServer, ",")
 
 	if len(credentialName) > 0 {
 		accessKey = p.opts.Config.GetString("credentials." + credentialName + ".access-key")
@@ -200,6 +213,30 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 
 	if len(channel) == 0 {
 		channel = port.Metadata["channel"]
+	}
+
+	if len(namespace) == 0 {
+		namespace = port.Metadata["namespace"]
+	}
+
+	if len(vipChannel) == 0 {
+		vipChannel = port.Metadata["vip_channel"]
+	}
+
+	if len(sendTimeout) == 0 {
+		sendTimeout = port.Metadata["send_timeout"]
+	}
+
+	if len(sendTimeout) == 0 {
+		sendTimeout = "5s"
+	}
+
+	if len(retryTimes) == 0 {
+		retryTimes = port.Metadata["retries"]
+	}
+
+	if len(delayLevel) == 0 {
+		delayLevel = port.Metadata["delay-level"]
 	}
 
 	partition := session.Query("partition")
@@ -228,20 +265,24 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
+	durSendTimeout, _ := time.ParseDuration(sendTimeout)
+	retries, _ := strconv.Atoi(retryTimes)
+	lvl, _ := strconv.Atoi(delayLevel)
+
 	msgBody := base64.StdEncoding.EncodeToString(data)
 
-	pConfig := &rmq.ProducerConfig{
-		ClientConfig: rmq.ClientConfig{
-			GroupID:    groupID,
-			NameServer: nameServer,
-			Credentials: &rmq.SessionCredentials{
-				AccessKey: accessKey,
-				SecretKey: secretKey,
-				Channel:   channel,
-			},
-		},
-		ProducerModel: rmq.CommonProducer,
-	}
+	var producerOptions []producer.Option
+	producerOptions = append(
+		producerOptions,
+		producer.WithCreateTopicKey(topic),
+		producer.WithGroupName(groupID),
+		producer.WithNameServer(nameServerList),
+		producer.WithNameServerDomain(nameServerDomain),
+		producer.WithNamespace(namespace),
+		producer.WithVIPChannel(vipChannel == "1"),
+		producer.WithSendMsgTimeout(durSendTimeout),
+		producer.WithRetry(retries),
+	)
 
 	propertyMap := map[string]string{}
 
@@ -255,15 +296,15 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		}
 	}
 
-	msg := rmq.Message{
-		Topic:    topic,
-		Body:     msgBody,
-		Tags:     tags,
-		Property: propertyMap,
-		Keys:     payload.GetId(),
-	}
+	msg := primitive.NewMessage(topic, []byte(msgBody))
+	msg.WithProperties(propertyMap)
+	msg.WithTag(tags)
+	msg.WithKeys([]string{payload.GetId()})
+	msg.WithDelayTimeLevel(lvl)
 
-	sendResult, err := p.sendMessageToRMQ(pConfig, &msg)
+	producerKey := fmt.Sprintf("%s:%s:%s:%s", nameServer, nameServerDomain, topic, secretKey)
+
+	sendResult, err := p.sendMessageToRMQ(producerKey, msg, producerOptions)
 
 	if err != nil {
 		return
@@ -277,9 +318,9 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 				NameServer: nameServer,
 				Tags:       tags,
 				Keys:       payload.GetId(),
-				Status:     sendResult.Status,
-				MsgID:      sendResult.MsgId,
-				Offset:     sendResult.Offset,
+				Status:     int(sendResult.Status),
+				MsgID:      sendResult.MsgID,
+				Offset:     sendResult.QueueOffset,
 			})
 		if err != nil {
 			return
@@ -289,8 +330,7 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 	return
 }
 
-func (p *RocketMQComponent) getProducer(config *rmq.ProducerConfig) (ret rmq.Producer, err error) {
-	key := fmt.Sprintf("%s:%s:%s", config.NameServer, config.GroupID, config.Credentials.String())
+func (p *RocketMQComponent) getProducer(key string, options ...producer.Option) (ret rmq.Producer, err error) {
 
 	p.producerLock.RLock()
 	if producer, exist := p.producers[key]; exist {
@@ -303,7 +343,7 @@ func (p *RocketMQComponent) getProducer(config *rmq.ProducerConfig) (ret rmq.Pro
 	p.producerLock.Lock()
 	defer p.producerLock.Unlock()
 
-	producer, err := rmq.NewProducer(config)
+	producer, err := rmq.NewProducer(options...)
 	if err != nil {
 		return
 	}
@@ -321,15 +361,15 @@ func (p *RocketMQComponent) getProducer(config *rmq.ProducerConfig) (ret rmq.Pro
 	return
 }
 
-func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rmq.Message) (result *rmq.SendResult, err error) {
-	producer, err := p.getProducer(config)
+func (p *RocketMQComponent) sendMessageToRMQ(producerKey string, msg *primitive.Message, options []producer.Option) (result *primitive.SendResult, err error) {
+	producer, err := p.getProducer(producerKey, options...)
 
 	if err != nil {
 		err = errors.WithMessage(err, "get producer failed")
 		return
 	}
 
-	sendResult, err := producer.SendMessageSync(msg)
+	sendResult, err := producer.SendSync(context.Background(), msg)
 	if err != nil {
 		return
 	}
@@ -338,23 +378,23 @@ func (p *RocketMQComponent) sendMessageToRMQ(config *rmq.ProducerConfig, msg *rm
 
 	logrus.WithFields(
 		logrus.Fields{
-			"component":   "rocketmq",
-			"alias":       p.alias,
-			"topic":       msg.Topic,
-			"tags":        msg.Tags,
-			"name_server": config.NameServer,
-			"access_key":  config.Credentials.AccessKey,
-			"key":         msg.Keys,
-			"result":      sendResult.String(),
+			"component":  "rocketmq",
+			"alias":      p.alias,
+			"topic":      msg.Topic,
+			"properties": msg.MarshallProperties(),
+			"tags":       msg.GetTags(),
+			"keys":       msg.GetKeys(),
+			"producer":   producerKey,
+			"result":     sendResult.String(),
 		},
 	).Debugln("Message sent")
 
 	return
 }
 
-func (p *RocketMQComponent) postMessage(msg *rmq.MessageExt) (err error) {
+func (p *RocketMQComponent) postMessage(msg *primitive.MessageExt) (err error) {
 
-	data, err := base64.StdEncoding.DecodeString(msg.Body)
+	data, err := base64.StdEncoding.DecodeString(string(msg.Body))
 	if err != nil {
 		return
 	}
