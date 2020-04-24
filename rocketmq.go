@@ -50,14 +50,19 @@ func (p *RocketMQComponent) Alias() string {
 }
 
 func (p *RocketMQComponent) Start() error {
-	return p.consumer.Start()
+	if p.consumer != nil {
+		return p.consumer.Start()
+	}
+	return nil
 }
 
 func (p *RocketMQComponent) Stop() (err error) {
 
-	err = p.consumer.Stop()
-	if err != nil {
-		return
+	if p.consumer != nil {
+		err = p.consumer.Stop()
+		if err != nil {
+			return
+		}
 	}
 
 	for _, producer := range p.producers {
@@ -95,25 +100,27 @@ func (p *RocketMQComponent) init(opts ...component.Option) (err error) {
 		return
 	}
 
-	mode := p.opts.Config.GetString("consumer.mode", "pull")
+	if p.opts.Config.HasPath("consumer") {
+		mode := p.opts.Config.GetString("consumer.mode", "pull")
 
-	if mode == "pull" {
-		p.consumer, err = NewPullConsumer(p.opts.Config)
-		if err != nil {
+		if mode == "pull" {
+			p.consumer, err = NewPullConsumer(p.opts.Config)
+			if err != nil {
+				return
+			}
+		} else if mode == "push" {
+
+			p.consumer, err = NewPushConsumer(p.opts.Config)
+			if err != nil {
+				return
+			}
+		} else {
+			err = fmt.Errorf("unknown mode: %s (push|pull)", mode)
 			return
 		}
-	} else if mode == "push" {
 
-		p.consumer, err = NewPushConsumer(p.opts.Config)
-		if err != nil {
-			return
-		}
-	} else {
-		err = fmt.Errorf("unknown mode: %s (push|pull)", mode)
-		return
+		p.consumer.SetConsumerFunc(p.postMessage)
 	}
-
-	p.consumer.SetConsumerFunc(p.postMessage)
 
 	return
 }
