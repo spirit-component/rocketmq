@@ -262,6 +262,10 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		}
 	}
 
+	if mqttClientID, ok := session.Payload().Content().HeaderOf("MQTT-TO-CLIENT-ID"); ok && len(mqttClientID) > 0 {
+		propertyMap["mqttSecondTopic"] = "/p2p/" + mqttClientID
+	}
+
 	msg := rmq.Message{
 		Topic:    topic,
 		Body:     msgBody,

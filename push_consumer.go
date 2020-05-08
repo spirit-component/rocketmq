@@ -1,6 +1,7 @@
 package rocketmq
 
 import (
+	"context"
 	"fmt"
 
 	rmq "github.com/apache/rocketmq-client-go/core"
@@ -19,7 +20,8 @@ type PushConsumer struct {
 
 	consumeFunc ConsumeFunc
 
-	limiter *rate.Limiter
+	limiter    *rate.Limiter
+	limiterCtx context.Context
 }
 
 func (p *PushConsumer) Start() (err error) {
@@ -39,11 +41,29 @@ func (p *PushConsumer) Start() (err error) {
 
 func (p *PushConsumer) consume(msg *rmq.MessageExt) rmq.ConsumeStatus {
 
-	if !p.limiter.Allow() {
-		return rmq.ReConsumeLater
+	err := p.limiter.Wait(p.limiterCtx)
+	if err != nil {
+		logrus.WithFields(
+			logrus.Fields{
+				"topic":       p.topic,
+				"expression":  p.expression,
+				"queue_id":    msg.QueueId,
+				"message_id":  msg.MessageID,
+				"tags":        msg.Tags,
+				"keys":        msg.Keys,
+				"name_server": p.consumerConfig.NameServer,
+			},
+		).Errorln(err)
+
+		if p.retryTimes == -1 {
+			return rmq.ReConsumeLater
+		} else if msg.ReconsumeTimes < p.retryTimes {
+			return rmq.ReConsumeLater
+		}
+		return rmq.ConsumeSuccess
 	}
 
-	err := p.consumeFunc(msg)
+	err = p.consumeFunc(msg)
 
 	if err != nil {
 		logrus.WithFields(
@@ -162,6 +182,8 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 		},
 	).Debug("rate limit configured")
 
+	ctx, _ := context.WithCancel(context.TODO())
+
 	consumer = &PushConsumer{
 		topic:      topic,
 		expression: expression,
@@ -169,7 +191,9 @@ func NewPushConsumer(conf config.Configuration) (consumer *PushConsumer, err err
 
 		consumerConfig: consumerConfig,
 		pushConsumer:   pushConsumer,
-		limiter:        rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
+
+		limiterCtx: ctx,
+		limiter:    rate.NewLimiter(rate.Limit(qps), int(bucketSize)),
 	}
 
 	return
