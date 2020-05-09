@@ -171,11 +171,6 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
-	if len(tags) == 0 {
-		err = fmt.Errorf("query of %s is empty", "tags")
-		return
-	}
-
 	nameServer := session.Query("name_server")
 	accessKey := session.Query("access_key")
 	secretKey := session.Query("secret_key")
