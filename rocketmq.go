@@ -186,6 +186,10 @@ func (p *RocketMQComponent) sendMessage(session mail.Session) (err error) {
 		return
 	}
 
+	if len(credentialName) == 0 {
+		credentialName = port.Metadata["credential_name"]
+	}
+
 	if len(credentialName) > 0 {
 		accessKey = p.opts.Config.GetString("credentials." + credentialName + ".access-key")
 		secretKey = p.opts.Config.GetString("credentials." + credentialName + ".secret-key")
